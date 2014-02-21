@@ -85,7 +85,7 @@ module Command
     wait = false
     output = nil
     format = nil
-    render_opts = {}
+    render_opts = {:header => true}
     exclude = false
 
     op.on('-v', '--verbose', 'show logs', TrueClass) {|b|
@@ -107,15 +107,26 @@ module Command
       end
       format = s
     }
+    op.on('-s', '--suppress-column-header', 'suppress output of the column header, when the schema is available for the table (only applies to tsv and csv formats)', TrueClass) {|b|
+      render_opts[:header] = !b;
+    }
     op.on('-x', '--exclude', 'do not automatically retrieve the job result', TrueClass) {|b|
       exclude = b
     }
 
     job_id = op.cmd_parse
 
+    # parameters validation
+
     if output.nil? && format
       unless ['tsv', 'csv', 'json'].include?(format)
-        raise "Supported formats are only tsv, csv and json without --output option"
+        raise "Supported formats are only tsv, csv and json without -o / --output option"
+      end
+    end
+
+    if !render_opts[:header]
+      unless ['tsv', 'csv'].include?(format)
+        raise "Supported formats are only tsv and csv with the -s / --suppress-column-header option"
       end
     end
 
@@ -228,14 +239,14 @@ module Command
 
   def show_result(job, output, format, render_opts={})
     if output
-      write_result(job, output, format)
+      write_result(job, output, format, render_opts)
       puts "written to #{output} in #{format} format"
     else
-      render_result(job, render_opts, format)
+      render_result(job, format, render_opts)
     end
   end
 
-  def write_result(job, output, format)
+  def write_result(job, output, format, render_opts={})
     case format
     when 'json'
       require 'yajl'
@@ -270,6 +281,13 @@ module Command
 
       open_file(output, "w") { |f|
         writer = CSV.new(f)
+        # output headers
+        if render_opts[:header] && job.hive_result_schema
+          writer << job.hive_result_schema.map {|name,type|
+            name
+          }
+        end
+        # output data
         job.result_each {|row|
           writer << row.map {|col| dump_column(col) }
         }
@@ -278,6 +296,14 @@ module Command
     when 'tsv'
       require 'yajl'
       open_file(output, "w") { |f|
+        # output headers
+        if render_opts[:header] && job.hive_result_schema
+          job.hive_result_schema.each {|name,type|
+            f.write name + "\t"
+          }
+          f.write "\n"
+        end
+        # output data
         job.result_each {|row|
           first = true
           row.each {|col|
@@ -311,7 +337,7 @@ module Command
     end
   end
 
-  def render_result(job, opts, format = nil)
+  def render_result(job, format=nil, render_opts={})
     require 'yajl'
 
     if format.nil?
@@ -323,14 +349,14 @@ module Command
         }
       }
 
-      opts[:max_width] = 10000
+      render_opts[:max_width] = 10000
       if job.hive_result_schema
-        opts[:change_fields] = job.hive_result_schema.map {|name,type| name }
+        render_opts[:change_fields] = job.hive_result_schema.map { |name,type| name }
       end
 
-      puts cmd_render_table(rows, opts)
+      puts cmd_render_table(rows, render_opts)
     else
-      write_result(job, nil, format)
+      write_result(job, nil, format, render_opts)
     end
   end
 
